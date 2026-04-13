@@ -22,6 +22,40 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moen_con
 API_SERVER  = "https://www.moen-iot.com"
 
 # ---------------------------------------------------------------------------
+# Temperature unit helpers
+# ---------------------------------------------------------------------------
+# The controller always stores and receives temperatures in Fahrenheit.
+# These lookup tables are taken directly from the official Moen app and define
+# the discrete valid temperature steps the controller supports.
+
+_C_TO_F = {
+    15:60,  16:61,  17:63,  18:65,  19:67,  20:68,  21:70,  22:72,  23:74,
+    24:76,  25:77,  26:79,  27:81,  28:83,  29:85,  30:86,  31:88,  32:90,
+    33:92,  34:94,  35:95,  36:97,  37:100, 38:101, 39:103, 40:104, 41:105,
+    42:107, 43:109, 44:111, 45:113, 46:114, 47:116, 48:118, 49:120,
+}
+_F_TO_C = {v: k for k, v in _C_TO_F.items()}
+
+def _to_controller_f(temp: int, celsius: bool) -> int:
+    """Convert a user-supplied temperature to Fahrenheit for the controller."""
+    if not celsius:
+        return temp
+    f = _C_TO_F.get(temp)
+    if f is None:
+        raise ValueError(
+            f"{temp}°C is not a valid controller step "
+            f"(valid range: {min(_C_TO_F)}–{max(_C_TO_F)}°C)"
+        )
+    return f
+
+def _fmt(temp_f, celsius: bool) -> str:
+    """Format a raw Fahrenheit value from the controller for display."""
+    if not celsius:
+        return f"{int(temp_f)}°F"
+    c = _F_TO_C.get(int(temp_f), round((temp_f - 32) * 5 / 9))
+    return f"{c}°C"
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -41,6 +75,19 @@ def get_credentials(user_token: str, serial: str) -> dict:
     req.add_header("Accept", "application/json")
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read())
+
+def get_temperature_units(user_token: str, serial: str) -> bool:
+    """Return True if the controller is configured for Celsius, False for Fahrenheit.
+    Fetched from GET /v5/showers/{serial}: temperature_units 0=Celsius, 1=Fahrenheit."""
+    try:
+        req = urllib.request.Request(f"{API_SERVER}/v5/showers/{serial}")
+        req.add_header("User-Token", user_token)
+        req.add_header("Accept", "application/json")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        return data.get("temperature_units", 1) == 0
+    except Exception:
+        return False  # default to Fahrenheit on any error
 
 def get_pusher_auth(user_token: str, serial: str, channel_name: str, socket_id: str) -> str:
     """Authenticate private channel. Custom params in query string, Pusher params in POST body."""
@@ -182,7 +229,7 @@ def trigger_control(sock, channel: str, action: str, params=None):
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_status(user_token: str, serial: str):
+def cmd_status(user_token: str, serial: str, celsius: bool):
     sock, channel = open_channel(user_token, serial)
     try:
         rpc_id = random.randint(1, 999)
@@ -197,20 +244,24 @@ def cmd_status(user_token: str, serial: str):
                 data = msg["data"]
                 if isinstance(data, str):
                     data = json.loads(data)
+                for key in ("current_temperature", "target_temperature"):
+                    if data.get(key) is not None:
+                        data[key] = _fmt(data[key], celsius)
                 print(json.dumps(data, indent=2))
                 return
         print("Timeout: no shower report received")
     finally:
         sock.close()
 
-def cmd_on(user_token: str, serial: str, temp_c: float):
+def cmd_on(user_token: str, serial: str, temp: float, celsius: bool):
+    temp_f = _to_controller_f(int(temp), celsius)
     sock, channel = open_channel(user_token, serial)
     try:
         trigger_control(sock, channel, "shower_on", {})
         time.sleep(0.3)
-        trigger_control(sock, channel, "temperature_set", {"target_temperature": int(temp_c)})
+        trigger_control(sock, channel, "temperature_set", {"target_temperature": temp_f})
         time.sleep(0.3)
-        print(f"Turn ON {int(temp_c)}°C → sent")
+        print(f"Turn ON {_fmt(temp_f, celsius)} → sent")
     finally:
         sock.close()
 
@@ -223,12 +274,13 @@ def cmd_off(user_token: str, serial: str):
     finally:
         sock.close()
 
-def cmd_temp(user_token: str, serial: str, temp_c: float):
+def cmd_temp(user_token: str, serial: str, temp: float, celsius: bool):
+    temp_f = _to_controller_f(int(temp), celsius)
     sock, channel = open_channel(user_token, serial)
     try:
-        trigger_control(sock, channel, "temperature_set", {"target_temperature": int(temp_c)})
+        trigger_control(sock, channel, "temperature_set", {"target_temperature": temp_f})
         time.sleep(0.3)
-        print(f"Set temp {int(temp_c)}°C → sent")
+        print(f"Set temp {_fmt(temp_f, celsius)} → sent")
     finally:
         sock.close()
 
@@ -253,10 +305,12 @@ if __name__ == "__main__":
     sub.add_parser("off",    help="Turn shower off")
 
     p_on = sub.add_parser("on", help="Turn shower on")
-    p_on.add_argument("--temp", type=float, default=38.0, help="Target °C (default 38)")
+    p_on.add_argument("--temp", type=float, default=None,
+                      help="Target temperature (°C or °F depending on your controller setting; default 38°C / 100°F)")
 
     p_temp = sub.add_parser("temp", help="Set temperature")
-    p_temp.add_argument("degrees", type=float, help="Target °C")
+    p_temp.add_argument("degrees", type=float,
+                        help="Target temperature (°C or °F depending on your controller setting)")
 
     p_preset = sub.add_parser("preset", help="Run a preset")
     p_preset.add_argument("position", type=int, help="Preset number (1-12)")
@@ -270,8 +324,16 @@ if __name__ == "__main__":
         print("Missing user_token in moen_config.json. Run setup_moen.py first.")
         sys.exit(1)
 
-    if   args.command == "status": cmd_status(user_token, serial)
-    elif args.command == "on":     cmd_on(user_token, serial, args.temp)
-    elif args.command == "off":    cmd_off(user_token, serial)
-    elif args.command == "temp":   cmd_temp(user_token, serial, args.degrees)
-    elif args.command == "preset": cmd_preset(user_token, serial, args.position)
+    celsius = get_temperature_units(user_token, serial)
+
+    if   args.command == "status":
+        cmd_status(user_token, serial, celsius)
+    elif args.command == "on":
+        temp = args.temp if args.temp is not None else (38.0 if celsius else 100.0)
+        cmd_on(user_token, serial, temp, celsius)
+    elif args.command == "off":
+        cmd_off(user_token, serial)
+    elif args.command == "temp":
+        cmd_temp(user_token, serial, args.degrees, celsius)
+    elif args.command == "preset":
+        cmd_preset(user_token, serial, args.position)
