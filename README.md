@@ -61,14 +61,14 @@ pip install cryptography
 ### Step 2 — Download the scripts
 
 ```bash
-wget https://raw.githubusercontent.com/YOUR_USERNAME/moen-provisioner/main/setup_moen.py
-wget https://raw.githubusercontent.com/YOUR_USERNAME/moen-provisioner/main/moen_provision.py
+wegt https://raw.githubusercontent.com/mezl/moen-provisioner/refs/heads/master/setup_moen.py
+wget https://raw.githubusercontent.com/mezl/moen-provisioner/refs/heads/master/moen_provision.py
 ```
 
 Or clone the repo:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/moen-provisioner.git
+git clone https://github.com/mezl/moen-provisioner.git
 cd moen-provisioner
 ```
 
@@ -126,6 +126,50 @@ python3 moen_provision.py --pin AB12
 
 ✅ SUCCESS! Shower connected to WiFi!
 ```
+
+---
+
+## Controlling the Shower
+
+Once provisioned, use `moen_control.py` to control the shower from any machine with internet access. It communicates via Moen's Pusher cloud relay — **no local network access to the controller is required**.
+
+Only `user_token` and `serial` from `moen_config.json` are needed (both saved by `setup_moen.py`).
+
+### Commands
+
+**Get current state:**
+```bash
+python3 moen_control.py status
+```
+Prints a JSON snapshot of the shower: current temperature, outlet states, running mode, etc.
+
+**Turn on at a target temperature:**
+```bash
+python3 moen_control.py on --temp 105
+```
+`--temp` is in **Fahrenheit** (default: 38, which is really only useful if your controller is configured in Celsius — most US controllers use °F). Substitute your desired temperature.
+
+**Turn off:**
+```bash
+python3 moen_control.py off
+```
+
+**Change temperature while running:**
+```bash
+python3 moen_control.py temp 100
+```
+
+**Run a saved preset:**
+```bash
+python3 moen_control.py preset 1
+```
+Presets 1–12 correspond to the presets configured in the Moen app.
+
+### Notes
+
+- **Internet required.** Commands are relayed through Moen's Pusher WebSocket service (`ws-*.pusher.com`). The controller must be online (home WiFi connected, Moen cloud reachable).
+- **No extra packages needed.** `moen_control.py` uses only Python stdlib (`ssl`, `socket`, `struct`).
+- **Token expiry.** If you get auth errors, re-run `python3 setup_moen.py` to refresh your `user_token`.
 
 ---
 
@@ -482,10 +526,11 @@ curl http://192.168.10.1/v1/prov/networks
 
 ---
 
-#### 🏠 After Provisioning — Home WiFi mode (`http://<controller-local-ip>`)
+#### 🏠 After Provisioning — Home WiFi mode (`http://<controller-local-ip>`) *(legacy / pre-Pusher firmware only)*
 
-Once provisioned, the controller joins your home WiFi and the Moen AP shuts down.
-The controller is now reachable at its home network IP (e.g. `192.168.1.x`), discovered via mDNS as `moen-dolphin._http._tcp.`.
+> ⚠️ **Firmware 3.x controllers with `hmi_supports_pusher` capability do NOT register these local HTTP routes.** All `/v1/shower` requests will return `File /path not_found`. Use `moen_control.py` (Pusher cloud relay) instead — see [Controlling the Shower](#controlling-the-shower) above.
+
+For **older firmware** (pre-Pusher), once provisioned the controller joins your home WiFi and is reachable at its local IP (e.g. `192.168.1.x`), discovered via mDNS as `moen-dolphin._http._tcp.`.
 
 > ⚠️ Auth-Hash for post-provisioning endpoints uses the **shower's own token** (from the cloud),
 > not the PIN. Formula: `sha256(showerToken:serial:showerToken)`
@@ -513,6 +558,7 @@ curl http://192.168.1.50/v1/shower   -H "Auth-Hash: <sha256(showerToken:serial:s
 |------|-------------|
 | `setup_moen.py` | One-time setup: saves credentials and fetches auth token |
 | `moen_provision.py` | Main provisioner script — run with `--pin XXXX` |
+| `moen_control.py` | Shower controller — on/off/temp/preset via Pusher cloud relay |
 | `moen_config.json` | Auto-generated config file (created by setup_moen.py) |
 
 **Example `moen_config.json`:**
