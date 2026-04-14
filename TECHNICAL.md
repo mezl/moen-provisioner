@@ -167,14 +167,37 @@ Firmware 3.x controllers register the `hmi_supports_pusher` capability with the 
 | `client-state-reported` | controller → app | Response to `do_shower_report` |
 | `client-command-resp` | controller → app | RPC response |
 
-### Control actions (`client-state-desired`)
+### Control actions (`client-state-desired`, type `"control"`)
 
 ```json
-{"type": "control", "data": {"action": "shower_on", "params": {}}}
+{"type": "control", "data": {"action": "shower_on",          "params": {}}}
 {"type": "control", "data": {"action": "shower_off"}}
-{"type": "control", "data": {"action": "temperature_set", "params": {"target_temperature": 101}}}
-{"type": "control", "data": {"action": "shower_on", "params": {"preset": 1}}}
+{"type": "control", "data": {"action": "temperature_set",    "params": {"target_temperature": 101}}}
+{"type": "control", "data": {"action": "shower_on",          "params": {"preset": 1}}}
+{"type": "control", "data": {"action": "outlets_set",        "params": {"outlets": [{"position": 1, "active": true}]}}}
 ```
+
+### Settings (`client-state-desired`, type `"settings"`)
+
+Used to update controller-level settings rather than shower state. The `data` field is the settings object directly (not wrapped in `action`/`params`).
+
+```json
+{"type": "settings", "data": {"homekit_enable": true}}
+{"type": "settings", "data": {"homekit_enable": false}}
+{"type": "settings", "data": {"max_temperature": 110, "use_fahrenheit": true, "display_brightness": 2}}
+```
+
+Available settings fields (from `HMISettings.java`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `homekit_enable` | bool | Enable/disable the controller's HomeKit accessory server |
+| `max_temperature` | int | Maximum allowed temperature (°F) |
+| `use_fahrenheit` | bool | Display units on controller screen |
+| `display_brightness` | int | Screen brightness level |
+| `idle_display_off` | bool | Turn off screen when idle |
+| `time_zone` | int | Timezone offset index |
+| `language` | int | UI language index |
 
 > `target_temperature` is always in **Fahrenheit** — the controller stores all temperatures internally as °F. `moen_control.py` handles conversion automatically based on your cloud account's `temperature_units` setting.
 
@@ -213,24 +236,62 @@ Available only while the controller broadcasts its own AP (`Moen_XXXXXX`).
 
 ### After Provisioning — Home WiFi mode (legacy / pre-Pusher firmware only)
 
-> ⚠️ **Firmware 3.x controllers with `hmi_supports_pusher` do NOT register these routes.** All `/v1/shower` requests return `File /path not_found`. Use `moen_control.py` instead.
+> ⚠️ **Firmware 3.x controllers with `hmi_supports_pusher` do NOT register these routes.** All `/v1/shower` requests return `File /path not_found`. Use `moen_control.py` (Pusher) or `moen_local.py` with HomeKit for offline control.
 
-For **older firmware** (pre-Pusher), once provisioned the controller is reachable at its home network IP (discoverable via mDNS as `moen-dolphin._http._tcp.`).
+For **older firmware** (pre-Pusher), once provisioned the controller is reachable at its home network IP (discoverable via mDNS as `moen-dolphin._http._tcp.local.`).
 
-Auth-Hash for these endpoints uses the **shower token** (not the PIN): `sha256(showerToken:serial:showerToken)`
+**mDNS discovery:** resolve hostname `moen-dolphin.local` — on Linux this requires Avahi, on macOS it works natively. TXT record includes `sn=<serial>` for identification.
 
-> The `showerToken` is different from your user token. It is returned by `GET /v5/showers/{serial}` as the `token` field.
+Auth-Hash for these endpoints uses the **shower token** (not the PIN):
+```
+sha256(showerToken + ":" + serial + ":" + showerToken)
+```
+
+> The `showerToken` is different from your cloud `user_token`. It is returned by `GET /v5/showers/{serial}` as the `token` field and stored by `setup_moen.py` as `shower_token` in `moen_config.json`.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/v1/shower` | GET | Get current shower state |
-| `/v1/shower` | POST | Set shower state (on/off/temp/preset) — AES/CTR encrypted body |
+| `/v1/shower` | GET | Get current shower state (encrypted response) |
+| `/v1/shower` | POST | Set shower state — AES-128-CTR encrypted body |
 | `/v1/refresh` | POST | Push updated settings to controller display |
 | `config` | POST | Update controller config |
 
-**AES/CTR encryption (POST body):**
-- Key: first 16 characters of `shower_token`
-- IV: first 16 bytes of `sha256(timestamp)`
+**AES-128-CTR encryption (applies to both POST body and GET response body):**
+
+```
+Key  = shower_token[:16]           (first 16 ASCII chars, used as-is as bytes)
+IV   = sha256hex(timestamp)[:16]   (first 16 chars of the hex digest, as ASCII bytes)
+Mode = AES/CTR/NoPadding
+```
+
+For **GET responses**, the `Timestamp` header in the HTTP response is the IV seed used for decryption (the controller encrypts the response using its own timestamp).
+
+For **POST requests**, the client generates a timestamp, sends it in the `Timestamp` header, and uses the same value as the IV seed for encryption.
+
+**Python implementation:**
+```python
+import hashlib
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+def aes_ctr(data: bytes, timestamp: str, shower_token: str, encrypt: bool) -> bytes:
+    key = shower_token[:16].encode()
+    iv  = hashlib.sha256(timestamp.encode()).hexdigest()[:16].encode()
+    c   = Cipher(algorithms.AES(key), modes.CTR(iv))
+    op  = c.encryptor() if encrypt else c.decryptor()
+    return op.update(data) + op.finalize()
+```
+
+**POST body schema** (`UpdateShowerRequest`, serialized as JSON before encryption):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `current_mode` | string | `"adjusting"` (on), `"off"`, `"paused"` |
+| `mode` | string | `"ready"` (on), `"off"` |
+| `target_temperature` | int | °F |
+| `active_preset` | int\|null | Preset number, null for manual |
+| `outlets` | array | `[{"position": N, "active": bool}]` |
+
+Minimal payloads are accepted — include only the fields being changed. `moen_local.py` does a GET-modify-POST cycle to preserve unchanged fields.
 
 #### Fallback provisioning path (older firmware)
 

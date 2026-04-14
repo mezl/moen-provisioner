@@ -155,11 +155,77 @@ python3 moen_control.py identify
 ```
 Sends the `identify` RPC to the controller — handy for confirming the cloud connection is live without changing shower state.
 
+**Enable or disable HomeKit:**
+```bash
+python3 moen_control.py homekit on
+python3 moen_control.py homekit off
+```
+Activates the controller's built-in HomeKit accessory server. See [Apple HomeKit](#apple-homekit--offline-control) below.
+
 ### Notes
 
 - **Internet required.** Commands relay through Moen's Pusher WebSocket service. The controller must be online.
 - **No extra packages.** `moen_control.py` uses Python stdlib only.
 - **Token expiry.** If you get auth errors, re-run `python3 setup_moen.py` to refresh `user_token`.
+
+---
+
+---
+
+## Apple HomeKit — Offline Control
+
+The U by Moen controller has a **native HomeKit accessory stack** built into the firmware. Once enabled and paired, the shower is controlled entirely over your local network — **no internet, no Pusher, no Moen cloud required**.
+
+### Setup (one-time, requires internet)
+
+**Step 1 — Enable HomeKit on the controller:**
+```bash
+python3 moen_control.py homekit on
+```
+This sends a settings event via Pusher that activates the controller's HomeKit service. You only need to run this once.
+
+**Step 2 — Pair in Apple Home:**
+1. Open the **Home** app on iPhone or iPad
+2. Tap **+** → **Add Accessory**
+3. Scan the QR code shown on the controller display, or tap **More options** and enter the 8-digit setup code manually
+
+**Step 3 — Done.** The shower now appears in Apple Home. You can:
+- Control it from the Home app on any Apple device
+- Use Siri: *"Hey Siri, turn on the shower"*
+- Create automations (e.g. start at 7 am, stop after 10 minutes)
+- Control via Apple Watch or CarPlay
+- Share access with family members in your Home
+
+All of this works **without internet** — HomeKit uses local Wi-Fi only.
+
+### Compatibility
+
+| Firmware | HomeKit path |
+|----------|-------------|
+| 3.x (`hmi_supports_pusher`) | `homekit on` command → pair once → fully local forever |
+| Legacy (pre-Pusher) | Same, or use `moen_local.py` for direct REST control |
+
+---
+
+## Local Network Control (legacy firmware only)
+
+> ⚠️ **Firmware 3.x controllers do not support this.** The `/v1/shower` endpoint returns `File not_found` on Pusher-enabled firmware. Use HomeKit (above) for offline control instead.
+
+For older (pre-Pusher) firmware, `moen_local.py` provides direct LAN control using the controller's local REST API with AES-128-CTR encryption — no cloud required at runtime.
+
+Requires `shower_token` and `controller_ip` in `moen_config.json` (both saved by `setup_moen.py`).
+
+```bash
+# Find and save the controller's local IP (if you don't know it)
+python3 moen_local.py discover
+
+# Same commands as moen_control.py, but local
+python3 moen_local.py status
+python3 moen_local.py on --temp 38
+python3 moen_local.py off
+python3 moen_local.py temp 40
+python3 moen_local.py outlet 1 on
+```
 
 ---
 
@@ -208,7 +274,8 @@ If presets don't work after provisioning: in the Moen app → Settings → **Sig
 |------|-------------|
 | `setup_moen.py` | One-time setup: saves credentials and fetches auth token |
 | `moen_provision.py` | Provisioner — run with `--pin XXXX` |
-| `moen_control.py` | Shower controller — on/off/temp/preset via Pusher cloud relay |
+| `moen_control.py` | Shower controller — on/off/temp/preset/homekit via Pusher cloud relay |
+| `moen_local.py` | Local controller — same commands via LAN REST API (legacy firmware only) |
 | `moen_config.json` | Auto-generated config (created by `setup_moen.py`, gitignored) |
 
 **Example `moen_config.json`:**

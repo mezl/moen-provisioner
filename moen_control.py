@@ -12,6 +12,7 @@ Usage:
   python3 moen_control.py temp 40
   python3 moen_control.py outlet 1 on
   python3 moen_control.py identify
+  python3 moen_control.py homekit on
 
 Requires moen_config.json with user_token and serial.
 Run setup_moen.py first if you haven't already.
@@ -307,6 +308,30 @@ def cmd_outlet(user_token: str, serial: str, position: int, active: bool):
     finally:
         sock.close()
 
+def cmd_homekit(user_token: str, serial: str, enable: bool):
+    """Enable or disable the controller's built-in HomeKit accessory server.
+
+    Sends a 'settings' type event (distinct from the 'control' type) via Pusher.
+    Once enabled the controller appears as an accessory on your local network and
+    can be paired in the Apple Home app — after pairing all control is purely
+    local (no internet required).
+    """
+    sock, channel = open_channel(user_token, serial)
+    try:
+        # HomeKit uses the 'settings' envelope type, not 'control'
+        pusher_send(sock, "client-state-desired",
+                    {"type": "settings", "data": {"homekit_enable": enable}},
+                    channel=channel)
+        time.sleep(0.3)
+        state = "enabled" if enable else "disabled"
+        print(f"HomeKit {state} → sent")
+        if enable:
+            print("Open the Apple Home app → Add Accessory → scan the QR code")
+            print("or enter the 8-digit setup code shown on the controller display.")
+            print("After pairing, Siri and HomeKit automations work without internet.")
+    finally:
+        sock.close()
+
 def cmd_rpc(user_token: str, serial: str, method: str):
     """Send a fire-and-forget JSON-RPC command (identify, reboot, …)."""
     sock, channel = open_channel(user_token, serial)
@@ -348,6 +373,11 @@ if __name__ == "__main__":
 
     sub.add_parser("identify", help="Flash/beep the controller to confirm connectivity")
 
+    p_hk = sub.add_parser("homekit",
+                           help="Enable/disable the controller's HomeKit accessory server")
+    p_hk.add_argument("state", choices=["on", "off"],
+                      help="on = enable HomeKit (pair once in Apple Home, then offline forever)")
+
     args       = parser.parse_args()
     cfg        = load_config()
     user_token = cfg.get("user_token")
@@ -374,3 +404,5 @@ if __name__ == "__main__":
         cmd_outlet(user_token, serial, args.position, args.state == "on")
     elif args.command == "identify":
         cmd_rpc(user_token, serial, "identify")
+    elif args.command == "homekit":
+        cmd_homekit(user_token, serial, args.state == "on")
