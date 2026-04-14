@@ -142,6 +142,19 @@ python3 moen_control.py preset 1
 ```
 Presets 1–12 match the presets configured in the Moen app.
 
+**Turn a specific outlet on or off:**
+```bash
+python3 moen_control.py outlet 1 on
+python3 moen_control.py outlet 2 off
+```
+Controls individual water outlets (1–4 depending on your controller). Useful when the shower is already running and you want to redirect flow.
+
+**Identify the controller (flash/beep):**
+```bash
+python3 moen_control.py identify
+```
+Sends the `identify` RPC to the controller — handy for confirming the cloud connection is live without changing shower state.
+
 ### Notes
 
 - **Internet required.** Commands relay through Moen's Pusher WebSocket service. The controller must be online.

@@ -10,6 +10,8 @@ Usage:
   python3 moen_control.py off
   python3 moen_control.py preset 1
   python3 moen_control.py temp 40
+  python3 moen_control.py outlet 1 on
+  python3 moen_control.py identify
 
 Requires moen_config.json with user_token and serial.
 Run setup_moen.py first if you haven't already.
@@ -293,6 +295,31 @@ def cmd_preset(user_token: str, serial: str, position: int):
     finally:
         sock.close()
 
+def cmd_outlet(user_token: str, serial: str, position: int, active: bool):
+    """Toggle a single outlet on or off via outlets_set."""
+    sock, channel = open_channel(user_token, serial)
+    try:
+        trigger_control(sock, channel, "outlets_set",
+                        {"outlets": [{"position": position, "active": active}]})
+        time.sleep(0.3)
+        state = "ON" if active else "OFF"
+        print(f"Outlet {position} {state} → sent")
+    finally:
+        sock.close()
+
+def cmd_rpc(user_token: str, serial: str, method: str):
+    """Send a fire-and-forget JSON-RPC command (identify, reboot, …)."""
+    sock, channel = open_channel(user_token, serial)
+    try:
+        rpc_id = random.randint(1, 999)
+        pusher_send(sock, "client-command",
+                    {"jsonrpc": "2.0", "method": method, "id": rpc_id},
+                    channel=channel)
+        time.sleep(0.3)
+        print(f"{method} → sent")
+    finally:
+        sock.close()
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -314,6 +341,12 @@ if __name__ == "__main__":
 
     p_preset = sub.add_parser("preset", help="Run a preset")
     p_preset.add_argument("position", type=int, help="Preset number (1-12)")
+
+    p_outlet = sub.add_parser("outlet", help="Turn a specific outlet on or off")
+    p_outlet.add_argument("position", type=int, help="Outlet number (1-4)")
+    p_outlet.add_argument("state",    choices=["on", "off"], help="on or off")
+
+    sub.add_parser("identify", help="Flash/beep the controller to confirm connectivity")
 
     args       = parser.parse_args()
     cfg        = load_config()
@@ -337,3 +370,7 @@ if __name__ == "__main__":
         cmd_temp(user_token, serial, args.degrees, celsius)
     elif args.command == "preset":
         cmd_preset(user_token, serial, args.position)
+    elif args.command == "outlet":
+        cmd_outlet(user_token, serial, args.position, args.state == "on")
+    elif args.command == "identify":
+        cmd_rpc(user_token, serial, "identify")
