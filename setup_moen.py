@@ -48,3 +48,5 @@ with open(config_file, "w") as f:
 print(f"\nSaved config to {config_file}")
 print(f"\nNow run:")
 print(f"  python3 moen_provision.py --pin YOURPIN")
+print(f"or")
+print(f"  python3 moen_control.py status")
